@@ -1,0 +1,6 @@
+elevenlabs
+google-genai
+numpy
+requests
+python-dotenv
+faster-whisper

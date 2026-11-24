@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+esp32_robot/src/robot_secrets.h
+esp32_cam/.pio/
+.pio/
+.DS_Store
