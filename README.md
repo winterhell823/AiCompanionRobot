@@ -28,25 +28,6 @@
 
 ---
 
-## Table of contents
-
-1. [Overview](#overview)
-2. [Key features](#key-features)
-3. [System architecture](#system-architecture)
-4. [Hardware](#hardware)
-5. [Software stack](#software-stack)
-6. [Repository structure](#repository-structure)
-7. [Getting started](#getting-started)
-8. [Usage](#usage)
-9. [Hardware test utilities](#hardware-test-utilities)
-10. [Dashboard](#dashboard)
-11. [Known limitations and roadmap](#known-limitations-and-roadmap)
-12. [Team](#team)
-13. [References](#references)
-14. [License](#license)
-
----
-
 ## Overview
 
 The AI Companion Robot combines artificial intelligence, computer vision, voice interaction and embedded systems in one wheeled platform. A person speaks to the robot, the robot answers aloud in natural speech, follows spoken movement commands, avoids obstacles, and shows its mood on a built-in screen.
