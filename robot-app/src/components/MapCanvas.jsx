@@ -3,13 +3,18 @@ export default function MapCanvas({ robotPosition = { x: 0, y: 0 }, obstacles = 
   const height = 420;
   const centerX = width / 2;
   const centerY = height / 2;
-  const scale = 4;
+  const numericSensorDistance = Number(sensorDistance);
+  const hasSensorReading = Number.isFinite(numericSensorDistance) && numericSensorDistance > 0;
+  const distances = [numericSensorDistance, ...obstacles.map((obstacle) => Math.hypot(obstacle.x, obstacle.y))]
+    .filter(Number.isFinite);
+  const extent = Math.max(50, ...distances) + 10;
+  const scale = Math.min((width - 80) / (extent * 2), (height - 80) / (extent * 2));
 
   const robotX = centerX + robotPosition.x * scale;
   const robotY = centerY - robotPosition.y * scale;
 
-  const sensorX = robotX + Math.cos((scanAngle * Math.PI) / 180) * (sensorDistance * 1.2);
-  const sensorY = robotY - Math.sin((scanAngle * Math.PI) / 180) * (sensorDistance * 1.2);
+  const sensorX = robotX + Math.cos((scanAngle * Math.PI) / 180) * (numericSensorDistance * scale);
+  const sensorY = robotY - Math.sin((scanAngle * Math.PI) / 180) * (numericSensorDistance * scale);
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="h-full w-full rounded-xl bg-slate-950">
@@ -26,7 +31,7 @@ export default function MapCanvas({ robotPosition = { x: 0, y: 0 }, obstacles = 
 
       <rect x="30" y="30" width={width - 60} height={height - 60} rx="18" fill="#0f172a" stroke="#1e293b" />
 
-      {showSensor && (
+      {showSensor && hasSensorReading && (
         <g>
           <line x1={robotX} y1={robotY} x2={sensorX} y2={sensorY} stroke="#67e8f9" strokeWidth="2" strokeDasharray="6 6" />
           <circle cx={sensorX} cy={sensorY} r="5" fill="#67e8f9" />
@@ -49,7 +54,7 @@ export default function MapCanvas({ robotPosition = { x: 0, y: 0 }, obstacles = 
       <g>
         <circle cx={robotX} cy={robotY} r={12} fill="#3b82f6" />
         <circle cx={robotX} cy={robotY} r={18} fill="none" stroke="#60a5fa" strokeWidth="1.5" strokeDasharray="6 4" />
-        <path d={`M ${robotX} ${robotY} L ${sensorX} ${sensorY}`} stroke="#93c5fd" strokeWidth="2" />
+        {hasSensorReading && <path d={`M ${robotX} ${robotY} L ${sensorX} ${sensorY}`} stroke="#93c5fd" strokeWidth="2" />}
       </g>
 
       <g>

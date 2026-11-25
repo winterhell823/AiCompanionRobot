@@ -1,13 +1,6 @@
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Octagon, Zap } from 'lucide-react';
 
 export default function ControlPad({ onMove, onStop, disabled = false, showWarning = false }) {
-  const directions = [
-    { key: 'forward', label: 'Forward', icon: ArrowUp },
-    { key: 'left', label: 'Left', icon: ArrowLeft },
-    { key: 'right', label: 'Right', icon: ArrowRight },
-    { key: 'backward', label: 'Backward', icon: ArrowDown },
-  ];
-
   return (
     <div className="dark-panel rounded-xl border border-slate-800 p-4">
       <div className="mb-4 flex items-center justify-between">
@@ -27,9 +20,7 @@ export default function ControlPad({ onMove, onStop, disabled = false, showWarni
         <button
           type="button"
           disabled={disabled}
-          onMouseDown={() => onMove('forward')}
-          onMouseUp={onStop}
-          onMouseLeave={onStop}
+          onClick={() => onMove('forward')}
           className="control-button"
         >
           <ArrowUp size={18} />
@@ -40,9 +31,7 @@ export default function ControlPad({ onMove, onStop, disabled = false, showWarni
         <button
           type="button"
           disabled={disabled}
-          onMouseDown={() => onMove('left')}
-          onMouseUp={onStop}
-          onMouseLeave={onStop}
+          onClick={() => onMove('left')}
           className="control-button"
         >
           <ArrowLeft size={18} />
@@ -61,9 +50,7 @@ export default function ControlPad({ onMove, onStop, disabled = false, showWarni
         <button
           type="button"
           disabled={disabled}
-          onMouseDown={() => onMove('right')}
-          onMouseUp={onStop}
-          onMouseLeave={onStop}
+          onClick={() => onMove('right')}
           className="control-button"
         >
           <ArrowRight size={18} />
@@ -74,9 +61,7 @@ export default function ControlPad({ onMove, onStop, disabled = false, showWarni
         <button
           type="button"
           disabled={disabled}
-          onMouseDown={() => onMove('backward')}
-          onMouseUp={onStop}
-          onMouseLeave={onStop}
+          onClick={() => onMove('backward')}
           className="control-button"
         >
           <ArrowDown size={18} />
@@ -86,7 +71,7 @@ export default function ControlPad({ onMove, onStop, disabled = false, showWarni
       </div>
 
       <div className="mt-4 flex items-center gap-3">
-        <button type="button" className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200">
+        <button type="button" onClick={onStop} className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200">
           <Zap size={14} /> Emergency stop
         </button>
       </div>

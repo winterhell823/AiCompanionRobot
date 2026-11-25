@@ -13,6 +13,12 @@ export async function apiRequest({ url, method = 'GET', data = null, fallback = 
       return fallback;
     }
 
-    throw new Error(error?.response?.data?.message || 'Backend integration required.');
+    const message = error?.response?.data?.message
+      || (error?.request
+        ? 'Backend is unavailable. Start api_server.py and try again.'
+        : 'Backend request failed.');
+    throw new Error(message, {
+      cause: error,
+    });
   }
 }

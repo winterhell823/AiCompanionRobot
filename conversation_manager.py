@@ -1,4 +1,5 @@
 import os
+from threading import Lock
 
 import requests
 
@@ -20,7 +21,24 @@ class RobotConversation:
         self.tts = ElevenLabsStreamer()
         self.receiver = ESP32AudioReceiver(esp32_ip, audio_port, self.on_transcript, self.on_connect, self.on_listening)
         self.tts.set_receiver(self.receiver)
+        self._speech_lock = Lock()
         self.greeted = False
+
+    def speak(self, text: str) -> int:
+        with self._speech_lock:
+            self._set_face("speaking", talk=True)
+            try:
+                return self.tts.speak(text)
+            finally:
+                self._set_face("listening")
+
+    def _speak_safely(self, text: str) -> bool:
+        try:
+            self.speak(text)
+        except Exception as exc:
+            print(f"[VOICE] Speaker playback failed: {exc}")
+            return False
+        return True
 
     def _set_face(self, face: str, talk: bool = False) -> None:
         try:
@@ -37,9 +55,8 @@ class RobotConversation:
 
     def on_connect(self) -> None:
         if not self.greeted:
-            self.greeted = True
-            self._set_face("speaking", talk=True)
-            self.tts.speak("Hi! How are you? I am your AI robot, here to assist you.")
+            if self._speak_safely("Hi! How are you? I am your AI robot, here to assist you."):
+                self.greeted = True
         self._set_face("listening")
 
     def on_transcript(self, text: str) -> None:
@@ -47,7 +64,7 @@ class RobotConversation:
             return
         self._set_face("thinking")
         if text.lower().strip(" .!?") in {"exit", "quit", "shut down"}:
-            self.tts.speak("Goodbye!")
+            self._speak_safely("Goodbye!")
             return
 
         routed = route_local_command(text)
@@ -60,9 +77,7 @@ class RobotConversation:
         elif routed["intent"] == "SHOW_LIVE_CAMERA":
             if not self.camera.show_live():
                 routed["response"] = "I could not open the live camera preview."
-        self._set_face("speaking", talk=True)
-        self.tts.speak(routed["response"])
-        self._set_face("listening")
+        self._speak_safely(routed["response"])
 
     def run(self) -> None:
         self.receiver.start()

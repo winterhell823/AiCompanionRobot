@@ -8,7 +8,6 @@ export async function getMapState(mode = 'demo') {
 
   return apiRequest({
     url: '/api/mapping/map',
-    fallback: { robotPosition: { x: 0, y: 0 }, obstacles: [], sensorDistance: 'N/A', scanAngle: 0 },
   });
 }
 
@@ -20,7 +19,6 @@ export async function startMapping(mode = 'demo') {
   return apiRequest({
     url: '/api/mapping/start',
     method: 'POST',
-    fallback: { success: false, message: 'Mapping backend unavailable.' },
   });
 }
 
@@ -32,7 +30,6 @@ export async function pauseMapping(mode = 'demo') {
   return apiRequest({
     url: '/api/mapping/pause',
     method: 'POST',
-    fallback: { success: false, message: 'Mapping backend unavailable.' },
   });
 }
 
@@ -44,6 +41,5 @@ export async function resetMapping(mode = 'demo') {
   return apiRequest({
     url: '/api/mapping/reset',
     method: 'POST',
-    fallback: { success: false, message: 'Mapping backend unavailable.' },
   });
 }

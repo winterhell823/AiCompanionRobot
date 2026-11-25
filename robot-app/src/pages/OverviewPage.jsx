@@ -1,20 +1,55 @@
-import { ArrowRight, Camera, Circle, Gauge, MessageSquareText, Mic, Radar, ShieldCheck, SlidersHorizontal } from 'lucide-react';
-import { useState } from 'react';
+import { ArrowRight, Circle, Gauge, MessageSquareText, Mic, Radar, ShieldCheck, SlidersHorizontal } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import ControlPad from '../components/ControlPad';
+import LiveCameraFeed from '../components/LiveCameraFeed';
 import MapCanvas from '../components/MapCanvas';
 import StatusCard from '../components/StatusCard';
 import { activityFeed, conversation, hardwareStatus, mappingSample } from '../data/demoData';
 import { useRobot } from '../context/RobotContext';
+import useRobotMovement from '../hooks/useRobotMovement';
+import { getMapState } from '../services/mappingService';
+
+const emptyMap = {
+  robotPosition: { x: 0, y: 0 },
+  obstacles: [],
+  sensorDistance: 'N/A',
+  scanAngle: 0,
+};
 
 export default function OverviewPage() {
   const { mode } = useRobot();
-  const [streaming, setStreaming] = useState(true);
-  const [recording, setRecording] = useState(false);
-  const [lastCommand, setLastCommand] = useState('Idle');
+  const movement = useRobotMovement();
+  const [liveMapState, setLiveMapState] = useState(emptyMap);
+  const [mapError, setMapError] = useState('');
+  const mapState = mode === 'live' ? liveMapState : mappingSample;
 
-  const handleMove = (direction) => setLastCommand(`Move: ${direction}`);
-  const handleStop = () => setLastCommand('Stop command sent');
+  useEffect(() => {
+    if (mode !== 'live') return undefined;
+
+    let active = true;
+    let timer;
+
+    const refreshMap = async () => {
+      try {
+        const nextMap = await getMapState('live');
+        if (active) {
+          setLiveMapState(nextMap);
+          setMapError('');
+        }
+      } catch (error) {
+        if (active) setMapError(error.message);
+      } finally {
+        if (active) timer = window.setTimeout(refreshMap, 1000);
+      }
+    };
+
+    refreshMap();
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [mode]);
 
   return (
     <div className="space-y-6 pb-8">
@@ -36,40 +71,27 @@ export default function OverviewPage() {
           <div className="mb-4 flex items-center justify-between">
             <div>
               <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Camera preview</div>
-              <h2 className="mt-1 text-xl font-semibold text-white">Live feed</h2>
-            </div>
-            <div className="flex items-center gap-2">
-              <button type="button" className="btn-secondary" onClick={() => setStreaming((current) => !current)}>
-                {streaming ? 'Stop stream' : 'Start stream'}
-              </button>
-              <button type="button" className="btn-secondary" onClick={() => setLastCommand('Snapshot captured')}>
-                Capture
-              </button>
+              <h2 className="mt-1 text-xl font-semibold text-white">Always-on live feed</h2>
             </div>
           </div>
 
-          <div className="relative flex min-h-[280px] items-center justify-center overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-center">
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(34,211,238,0.12),_transparent_60%)]" />
-            <div className="relative z-10 max-w-md space-y-3">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-cyan-400/40 bg-cyan-500/10 text-cyan-300">
-                <Camera size={22} />
-              </div>
-              <div className="text-lg font-medium text-slate-100">Camera stream unavailable</div>
-              <div className="text-sm text-slate-400">{mode === 'demo' ? 'Demo placeholder active. Connect live hardware to restore feed.' : 'Hardware is disconnected.'}</div>
-            </div>
-          </div>
+          <LiveCameraFeed />
 
           <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-300">
-            <span className="flex items-center gap-2"><Circle size={10} className="fill-emerald-400 text-emerald-400" />Object detection: active</span>
-            <button type="button" className="btn-secondary" onClick={() => setRecording((current) => !current)}>
-              {recording ? 'Stop recording' : 'Record'}
-            </button>
-            <span className="text-xs uppercase tracking-[0.18em] text-cyan-300">{lastCommand}</span>
+            <span className="flex items-center gap-2"><Circle size={10} className="fill-cyan-400 text-cyan-400" />Camera refreshes independently of the TFT preview timer</span>
           </div>
         </div>
 
         <div className="space-y-6">
-          <ControlPad onMove={handleMove} onStop={handleStop} disabled={false} showWarning={false} />
+          <ControlPad
+            onMove={movement.handleMove}
+            onStop={movement.handleStop}
+            disabled={!movement.liveMode || movement.pending}
+            showWarning={false}
+          />
+          {!movement.liveMode && <p className="text-xs text-amber-200">Select Live mode in the top bar to control the robot.</p>}
+          {movement.error && <p role="alert" className="text-sm text-rose-300">{movement.error}</p>}
+          <p className="text-xs text-slate-400">Last command: {movement.lastCommand}</p>
         </div>
       </div>
 
@@ -86,12 +108,13 @@ export default function OverviewPage() {
           </div>
           <div className="h-[240px] overflow-hidden rounded-xl border border-slate-800">
             <MapCanvas
-              robotPosition={mappingSample.robotPosition}
-              obstacles={mappingSample.obstacles}
-              sensorDistance={mappingSample.sensorDistance}
-              scanAngle={mappingSample.scanAngle}
+              robotPosition={mapState.robotPosition}
+              obstacles={mapState.obstacles}
+              sensorDistance={mapState.sensorDistance}
+              scanAngle={mapState.scanAngle}
             />
           </div>
+          {mapError && <p role="alert" className="mt-2 text-xs text-rose-300">{mapError}</p>}
         </div>
 
         <div className="dark-panel rounded-2xl border border-slate-800 p-4">

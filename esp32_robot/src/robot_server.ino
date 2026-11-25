@@ -25,9 +25,12 @@ const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 const float LAT = 28.4595;                    // Gurugram, change for your city
 const float LON = 77.0266;
 const long  GMT_OFFSET_SEC = 19800;           // IST = UTC+5:30
-const unsigned long IDLE_AFTER_MS = 20000;    // face -> wallpaper after this long with no activity
+const unsigned long IDLE_AFTER_MS = 20000;    // non-listening face -> idle after inactivity
+const unsigned long LISTENING_FACE_MS = 5000;
 const unsigned long INFO_MS  = 10000;         // idle: clock + weather screen stays this long
 const unsigned long EMOJI_MS = 5000;          // idle: then a random emoji face stays this long
+const unsigned long WEATHER_REFRESH_MS = 900000;
+const unsigned long WEATHER_RETRY_MS = 300000;
 const char* CAMERA_IP = "192.168.1.10";
 const uint16_t CAMERA_PORT = 80;
 const char* CAMERA_PATH = "/capture";
@@ -120,6 +123,7 @@ uint8_t previousIdlePage = 0;
 String previousFace = "happy";
 bool previousTalking = false;
 unsigned long previousInteract = 0;
+bool faceSensorHudVisible = false;
 volatile bool muteMicRequested = false;
 portMUX_TYPE sensorMux = portMUX_INITIALIZER_UNLOCKED;
 int obstacleDistanceCm = 999;
@@ -133,7 +137,8 @@ unsigned long obstacleUpdatedAt = 0;
 #define MIC_DO 35
 const int AUDIO_RATE = 16000;
 const int AUDIO_FRAMES = 256;
-const int SPEAKER_VOLUME = 13;
+const float MIC_PCM_GAIN = 0.5f;
+const int SPEAKER_VOLUME_PERCENT = 15;
 const int SPEAKER_PREFILL = 1500;
 const int SPEAKER_RING_SIZE = 4096;
 WiFiServer audioServer(5005);
@@ -226,7 +231,7 @@ void audioTask(void*) {
       while (micros() - started < (i * 625UL) / 10) taskYIELD();
       int raw = adc1_get_raw(ADC1_CHANNEL_6);
       dc += 0.002f * (raw - dc);
-      float gained = (raw - dc) * 2.0f * 16.0f;
+      float gained = (raw - dc) * 2.0f * 16.0f * MIC_PCM_GAIN;
       microphone[i] = (int16_t)constrain(gained, -32768, 32767);
     }
 
@@ -247,7 +252,7 @@ void audioTask(void*) {
         speakerTail = (speakerTail + 1) % SPEAKER_RING_SIZE;
         speakerCount--;
       }
-      sample = (int16_t)(((int32_t)sample * SPEAKER_VOLUME) / 256);
+      sample = (int16_t)(((int32_t)sample * SPEAKER_VOLUME_PERCENT) / 100);
       if (gate < gateTarget) {
         gate += 1.0f / 1600;
         if (gate > 1.0f) gate = 1.0f;
@@ -497,7 +502,7 @@ void fetchWeather() {
   if (ok) Serial.println("[weather] current weather updated");
   else Serial.printf("[weather] fetch failed (HTTP %d or invalid response)\n", responseCode);
   weatherOk = weatherOk || ok;
-  nextWeather = millis() + (ok ? 900000UL : (weatherOk ? 60000UL : 10000UL));
+  nextWeather = millis() + (ok ? WEATHER_REFRESH_MS : WEATHER_RETRY_MS);
   lastSec = -2;
   if (mode == MODE_IDLE && idlePage == 0) pageChanged = millis();
 }
@@ -681,6 +686,40 @@ void drawFace() {
   drawMouth(f, fc);                                // mouth first, eyes on top
   drawEyes(f);
   drawExtras(f);
+  if (faceSensorHudVisible) {
+    int cm;
+    bool unavailable, noEcho;
+    unsigned long updated;
+    portENTER_CRITICAL(&sensorMux);
+    cm = obstacleDistanceCm;
+    unavailable = obstacleSensorUnavailable;
+    noEcho = obstacleNoEcho;
+    updated = obstacleUpdatedAt;
+    portEXIT_CRITICAL(&sensorMux);
+
+    bool fresh = updated != 0 && millis() - updated <= 1000;
+    bool valid = fresh && !unavailable && !noEcho && cm > 0 && cm < SENSOR_MAX_CM;
+    bool clear = fresh && !unavailable && (noEcho || cm >= SENSOR_MAX_CM);
+    const char* status = valid
+        ? (cm <= STOP_CM ? "STOP" : cm <= 50 ? "NEAR" : "CLEAR")
+        : clear ? "CLEAR" : "SENSOR OFFLINE";
+    uint16_t color = !valid
+        ? (clear ? C565(120, 220, 255) : C565(170, 170, 180))
+        : cm <= STOP_CM ? C565(255, 65, 75)
+        : cm <= 50 ? C565(255, 145, 55)
+        : C565(90, 255, 140);
+    char text[32];
+    if (valid) snprintf(text, sizeof(text), "%d cm  %s", cm, status);
+    else if (clear) strcpy(text, "CLEAR  >200 cm");
+    else strcpy(text, "-- cm  SENSOR OFFLINE");
+
+    cv.fillRoundRect(3, 3, 154, 20, 5, C565(4, 12, 20));
+    cv.drawRoundRect(3, 3, 154, 20, 5, color);
+    cv.setTextSize(1);
+    cv.setTextColor(color);
+    cv.setCursor(8, 9);
+    cv.print(text);
+  }
   push();
 }
 
@@ -811,6 +850,7 @@ void drawObstacleMonitor() {
 
   bool stale = updated == 0 || millis() - updated > 1000;
   bool valid = !stale && !unavailable && !noEcho && cm < SENSOR_MAX_CM;
+  bool clear = !stale && !unavailable && (noEcho || cm >= SENSOR_MAX_CM);
   uint16_t color = C565(90, 255, 140);
   const char* status = "CLEAR";
   if (stale || unavailable) {
@@ -838,6 +878,7 @@ void drawObstacleMonitor() {
 
   char distanceText[16];
   if (valid) snprintf(distanceText, sizeof(distanceText), "%d cm", cm);
+  else if (clear) strcpy(distanceText, ">200 cm");
   else strcpy(distanceText, "-- cm");
   cv.setTextSize(3);
   cv.setTextColor(color);
@@ -885,8 +926,7 @@ void startIdle() {
 }
 
 // ================= motors =================
-void drive(int left, int right) {                  // 1 forward, -1 reverse, 0 stop; M1+M2 = left, M3+M4 = right
-  int dirs[4] = {left, left, right, right};
+void applyMotorDirections(const int dirs[4]) {
   byte bits = 0;
   for (int m = 0; m < 4; m++) {
     if (dirs[m] > 0) bits |= (1 << A_BIT[m]);
@@ -898,6 +938,17 @@ void drive(int left, int right) {                  // 1 forward, -1 reverse, 0 s
   digitalWrite(SR_LATCH, HIGH);
 }
 
+void drive(int left, int right) {                  // 1 forward, -1 reverse, 0 stop; M1+M2 = left, M3+M4 = right
+  const int dirs[4] = {left, left, right, right};
+  applyMotorDirections(dirs);
+}
+
+void driveManualStraight(int direction) {
+  // Front channels M1/M2 are wired opposite to rear channels M3/M4.
+  const int dirs[4] = {direction, direction, -direction, -direction};
+  applyMotorDirections(dirs);
+}
+
 // ================= obstacle sensor + idle wandering =================
 int readCm() {                                     // Latest filtered measurement; acquisition runs independently.
   portENTER_CRITICAL(&sensorMux);
@@ -906,6 +957,29 @@ int readCm() {                                     // Latest filtered measuremen
                      millis() - obstacleUpdatedAt > 1000;
   portEXIT_CRITICAL(&sensorMux);
   return unavailable ? 0 : cm;
+}
+
+void handleTelemetry() {
+  int cm;
+  bool unavailable, noEcho;
+  unsigned long updated;
+  portENTER_CRITICAL(&sensorMux);
+  cm = obstacleDistanceCm;
+  unavailable = obstacleSensorUnavailable;
+  noEcho = obstacleNoEcho;
+  updated = obstacleUpdatedAt;
+  portEXIT_CRITICAL(&sensorMux);
+
+  bool stale = updated == 0 || millis() - updated > 1000;
+  if (stale || unavailable || noEcho || cm <= 0 || cm >= SENSOR_MAX_CM) {
+    server.send(503, "application/json", "{\"message\":\"distance sensor has no recent reading\"}");
+    return;
+  }
+  char payload[96];
+  snprintf(payload, sizeof(payload),
+           "{\"distanceCm\":%d,\"unit\":\"cm\",\"timestampMs\":%lu}",
+           cm, millis());
+  server.send(200, "application/json", payload);
 }
 
 void ultrasonicTask(void*) {
@@ -1019,8 +1093,8 @@ bool fetchCameraFrame() {
   }
 
   HTTPClient http;
-  http.setConnectTimeout(2500);
-  http.setTimeout(3000);
+  http.setConnectTimeout(500);
+  http.setTimeout(1000);
   http.setReuse(false);
 
   String url = String("http://") + CAMERA_IP + ":" + String(CAMERA_PORT) + CAMERA_PATH;
@@ -1048,7 +1122,7 @@ bool fetchCameraFrame() {
   size_t got = 0;
   unsigned long started = millis();
   if (size > 0) {
-    while (got < (size_t)size && millis() - started < 3500) {
+    while (got < (size_t)size && millis() - started < 1500) {
       size_t avail = stream->available();
       if (avail > 0) {
         got += stream->readBytes(cameraFrame + got, min(avail, (size_t)size - got));
@@ -1065,7 +1139,7 @@ bool fetchCameraFrame() {
       return false;
     }
   } else {
-    while (got < CAMERA_BUFFER_SIZE && millis() - started < 3500) {
+    while (got < CAMERA_BUFFER_SIZE && millis() - started < 1500) {
       size_t avail = stream->available();
       if (avail > 0) {
         got += stream->readBytes(cameraFrame + got, min(avail, CAMERA_BUFFER_SIZE - got));
@@ -1085,6 +1159,67 @@ bool fetchCameraFrame() {
   cameraFrameLength = got;
   Serial.printf("[camera] received %u-byte frame\n", (unsigned)got);
   return true;
+}
+
+void handleFrame() {
+  if (!cameraFrame || !fetchCameraFrame()) {
+    cameraAvailable = false;
+    server.send(503, "text/plain", "camera frame unavailable");
+    return;
+  }
+  if (cameraFrameLength < 2 || cameraFrame[0] != 0xFF || cameraFrame[1] != 0xD8) {
+    cameraAvailable = false;
+    server.send(503, "text/plain", "camera frame unavailable");
+    return;
+  }
+
+  cameraAvailable = true;
+  server.sendHeader("Cache-Control", "no-store");
+  server.setContentLength(cameraFrameLength);
+  server.send(200, "image/jpeg", "");
+  server.sendContent(reinterpret_cast<const char*>(cameraFrame), cameraFrameLength);
+}
+
+void handleCameraStatus() {
+  server.send(
+      200,
+      "application/json",
+      cameraAvailable ? "{\"connected\":true}" : "{\"connected\":false}");
+}
+
+void drawCameraDistanceHud() {
+  int cm;
+  bool unavailable, noEcho;
+  unsigned long updated;
+  portENTER_CRITICAL(&sensorMux);
+  cm = obstacleDistanceCm;
+  unavailable = obstacleSensorUnavailable;
+  noEcho = obstacleNoEcho;
+  updated = obstacleUpdatedAt;
+  portEXIT_CRITICAL(&sensorMux);
+
+  bool fresh = updated != 0 && millis() - updated <= 1000;
+  bool valid = fresh && !unavailable && !noEcho && cm > 0 && cm < SENSOR_MAX_CM;
+  bool clear = fresh && !unavailable && (noEcho || cm >= SENSOR_MAX_CM);
+  const char* status = valid
+      ? (cm <= STOP_CM ? "STOP" : cm <= 50 ? "NEAR" : "CLEAR")
+      : clear ? "CLEAR" : "SENSOR OFFLINE";
+  uint16_t color = !valid
+      ? (clear ? C565(120, 220, 255) : C565(170, 170, 180))
+      : cm <= STOP_CM ? C565(255, 65, 75)
+      : cm <= 50 ? C565(255, 145, 55)
+      : C565(90, 255, 140);
+  char text[32];
+  if (valid) snprintf(text, sizeof(text), "%d cm  %s", cm, status);
+  else if (clear) strcpy(text, "CLEAR  >200 cm");
+  else strcpy(text, "-- cm  SENSOR OFFLINE");
+
+  tft.fillRoundRect(3, 3, 154, 20, 5, C565(4, 12, 20));
+  tft.drawRoundRect(3, 3, 154, 20, 5, color);
+  tft.setTextSize(1);
+  tft.setTextColor(color);
+  tft.setCursor(8, 9);
+  tft.print(text);
 }
 
 bool renderCameraFrame(bool clearScreen = true) {
@@ -1122,6 +1257,7 @@ bool renderCameraFrame(bool clearScreen = true) {
     Serial.printf("[camera] unsupported frame format, %u bytes\n", (unsigned)len);
     return false;
   }
+  drawCameraDistanceHud();
   return true;
 }
 
@@ -1239,6 +1375,13 @@ void serviceCamera(unsigned long now) {
   }
 }
 
+void serviceFaceSensorHud() {
+  bool faceActive = mode == MODE_FACE ||
+                    ((mode == CAMERA_PREVIEW || mode == DISPLAYING_PHOTO) &&
+                     previousMode == MODE_FACE);
+  faceSensorHudVisible = faceActive;
+}
+
 void handleCapture() {
   if (mode == CAMERA_PREVIEW && cameraModeRandom) {
     cameraModeRandom = false;
@@ -1287,8 +1430,8 @@ void handleCmd() {                                 // /cmd?c=forward&ms=1500
   String c = server.arg("c");
   long ms = server.hasArg("ms") ? server.arg("ms").toInt() : 1000;
   ms = constrain(ms, 100, 5000);
-  if (c == "forward")       drive(1, 1);
-  else if (c == "backward") drive(-1, -1);
+  if (c == "forward")       driveManualStraight(1);
+  else if (c == "backward") driveManualStraight(-1);
   else if (c == "left")     drive(-1, 1);          // swap these two if it turns the wrong way
   else if (c == "right")    drive(1, -1);
   else if (c == "stop")     drive(0, 0);
@@ -1410,6 +1553,9 @@ void setup() {
   setupSpeakerI2s();
 
   server.on("/cmd", handleCmd);
+  server.on("/telemetry", handleTelemetry);
+  server.on("/frame", handleFrame);
+  server.on("/camera/status", handleCameraStatus);
   server.on("/face", handleFace);
   server.on("/idle", handleIdle);
   server.on("/capture", handleCapture);
@@ -1443,7 +1589,14 @@ void loop() {
     startupDashboardUntil = 0;
     if (lastInteract && now - lastInteract <= IDLE_AFTER_MS) mode = MODE_FACE;
   }
+
+  if (mode == MODE_IDLE) {
+    unsigned long pageDuration = idlePage == 1 ? EMOJI_MS : idlePage == 2 ? SENSOR_PAGE_MS : INFO_MS;
+    if (now - pageChanged >= pageDuration) nextPage();
+  }
+
   serviceCamera(now);
+  serviceFaceSensorHud();
 
   if (moving && (long)(now - stopAt) >= 0) {       // auto-stop safety
     drive(0, 0);
@@ -1457,14 +1610,13 @@ void loop() {
 
   wanderStep(now);
 
-  if (mode == MODE_FACE && now - lastInteract > IDLE_AFTER_MS) startIdle();
+  unsigned long faceTimeout = face == "listening" ? LISTENING_FACE_MS : IDLE_AFTER_MS;
+  if (mode == MODE_FACE && now - lastInteract > faceTimeout) startIdle();
 
   if (mode == MODE_FACE) {
     static unsigned long lastFrame = 0;
     if (now - lastFrame >= 80) { lastFrame = now; drawFace(); }
   } else if (mode == MODE_IDLE) {
-    unsigned long pageDuration = idlePage == 1 ? EMOJI_MS : idlePage == 2 ? SENSOR_PAGE_MS : INFO_MS;
-    if (now - pageChanged >= pageDuration) nextPage();
     if (idlePage == 1) {
       static unsigned long lastEmoji = 0;
       if (now - lastEmoji >= 60) { lastEmoji = now; drawEmoji(emojiType); }
@@ -1481,7 +1633,7 @@ void loop() {
     }
   }
 
-  if (WiFi.status() == WL_CONNECTED && mode != CAMERA_PREVIEW && mode != DISPLAYING_PHOTO &&
+  if (WiFi.status() == WL_CONNECTED && mode == MODE_IDLE && idlePage == 0 &&
       (long)(now - nextWeather) >= 0) {
     fetchWeather();
   }

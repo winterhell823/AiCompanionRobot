@@ -1,39 +1,130 @@
-import { Bot, Mic, SendHorizonal, Speaker, Trash2, Volume2, Waves } from 'lucide-react';
-import { useState } from 'react';
+import { Bot, Mic, SendHorizonal, Speaker, Trash2, Waves } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { conversation } from '../data/demoData';
 import { useRobot } from '../context/RobotContext';
+import { apiRequest } from '../services/api';
+import { speakAssistantReply, startAssistantConversation } from '../services/aiService';
+
+const weatherQuestion = /\b(weather|wheather|wether|forecast|temperature|rain|raining|snow|wind|humidity|umbrella)\b/i;
 
 export default function CompanionPage() {
   const { mode } = useRobot();
   const [messages, setMessages] = useState(conversation);
   const [draft, setDraft] = useState('');
-  const [isListening, setIsListening] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
+  const [speakerEnabled, setSpeakerEnabled] = useState(true);
+  const [agentStatus, setAgentStatus] = useState('Disconnected');
+  const [error, setError] = useState('');
+  const conversationRef = useRef(null);
+  const speakerEnabledRef = useRef(speakerEnabled);
 
-  const submitMessage = () => {
-    if (!draft.trim()) return;
+  useEffect(() => {
+    speakerEnabledRef.current = speakerEnabled;
+  }, [speakerEnabled]);
 
-    const nextMessage = {
-      speaker: 'user',
-      text: draft.trim(),
-      time: 'Now',
-    };
+  useEffect(() => {
+    if (mode === 'demo' && conversationRef.current) {
+      const activeConversation = conversationRef.current;
+      conversationRef.current = null;
+      activeConversation.endSession().catch((sessionError) => {
+        setError(sessionError.message || 'Could not close the ElevenLabs session.');
+      });
+    }
+  }, [mode]);
 
-    setMessages((current) => [...current, nextMessage]);
+  useEffect(
+    () => () => {
+      const activeConversation = conversationRef.current;
+      conversationRef.current = null;
+      if (activeConversation) {
+        activeConversation.endSession().catch((sessionError) => {
+          console.error('Could not close the ElevenLabs session:', sessionError);
+        });
+      }
+    },
+    [],
+  );
+
+  const getConversation = async () => {
+    if (conversationRef.current) return conversationRef.current;
+
+    const activeConversation = await startAssistantConversation({
+      onMessage: ({ message, source }) => {
+        if (source !== 'ai' || !message?.trim()) return;
+        setMessages((current) => [
+          ...current,
+          { speaker: 'robot', text: message.trim(), time: 'Now' },
+        ]);
+        setIsThinking(false);
+
+        if (speakerEnabledRef.current) {
+          speakAssistantReply(message).catch((speakError) => {
+            setError(`Reply received, but speaker playback failed: ${speakError.message}`);
+          });
+        }
+      },
+      onStatusChange: ({ status }) => setAgentStatus(status),
+      onDisconnect: () => {
+        conversationRef.current = null;
+        setAgentStatus('Disconnected');
+      },
+      onError: (message) => {
+        setError(message || 'ElevenLabs conversation failed.');
+        setIsThinking(false);
+      },
+    });
+
+    conversationRef.current = activeConversation;
+    return activeConversation;
+  };
+
+  const submitMessage = async () => {
+    const text = draft.trim();
+    if (!text || isThinking) return;
+
+    setMessages((current) => [...current, { speaker: 'user', text, time: 'Now' }]);
     setDraft('');
+    setError('');
     setIsThinking(true);
 
-    window.setTimeout(() => {
-      setMessages((current) => [
-        ...current,
-        {
-          speaker: 'robot',
-          text: mode === 'demo' ? 'Demo placeholder response: I have received your input and will send it to the Qwen backend once live mode is connected.' : 'Live AI response is pending backend connection.',
-          time: 'Now',
-        },
-      ]);
+    if (mode === 'demo') {
+      window.setTimeout(() => {
+        setMessages((current) => [
+          ...current,
+          {
+            speaker: 'robot',
+            text: 'Demo response: switch to Live mode to connect to the ElevenLabs agent.',
+            time: 'Now',
+          },
+        ]);
+        setIsThinking(false);
+      }, 800);
+      return;
+    }
+
+    try {
+      if (weatherQuestion.test(text)) {
+        const { reply } = await apiRequest({
+          url: '/api/assistant/weather',
+          method: 'POST',
+          data: { message: text },
+        });
+        setMessages((current) => [...current, { speaker: 'robot', text: reply, time: 'Now' }]);
+        setIsThinking(false);
+        if (speakerEnabledRef.current) {
+          speakAssistantReply(reply).catch((speakError) => {
+            setError(`Reply received, but speaker playback failed: ${speakError.message}`);
+          });
+        }
+        return;
+      }
+
+      const activeConversation = await getConversation();
+      activeConversation.sendUserMessage(text);
+    } catch (sendError) {
+      setError(sendError.message || 'Could not send the message to ElevenLabs.');
       setIsThinking(false);
-    }, 800);
+    }
   };
 
   return (
@@ -65,22 +156,23 @@ export default function CompanionPage() {
                 ))
               )}
               {isThinking && <div className="text-xs uppercase tracking-[0.18em] text-slate-400">AI is processing…</div>}
+              {error && <div role="alert" className="text-sm text-rose-300">{error}</div>}
             </div>
 
             <div className="mt-4 space-y-3">
               <div className="flex gap-2">
-                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows="3" placeholder="Ask the robot to narrate the environment or respond to a query…" className="input-field flex-1 resize-none" />
+                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows="3" placeholder="Ask the robot a question…" className="input-field flex-1 resize-none" />
               </div>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => setIsListening((current) => !current)} className={`rounded-lg border px-3 py-2 text-sm ${isListening ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-slate-700 bg-slate-900 text-slate-200'}`}>
-                    <Mic size={14} />
-                  </button>
-                  <button type="button" className="btn-secondary">
-                    <Speaker size={14} /> Speaker
+                  <span title="Voice input is handled by the robot microphone and backend." className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300">
+                    <Mic size={14} /> Robot mic
+                  </span>
+                  <button type="button" className="btn-secondary" aria-pressed={speakerEnabled} onClick={() => setSpeakerEnabled((enabled) => !enabled)}>
+                    <Speaker size={14} /> Speaker {speakerEnabled ? 'On' : 'Off'}
                   </button>
                 </div>
-                <button type="button" onClick={submitMessage} className="btn-primary">
+                <button type="button" onClick={submitMessage} disabled={isThinking || !draft.trim()} className="btn-primary disabled:cursor-not-allowed disabled:opacity-50">
                   <SendHorizonal size={14} /> Send
                 </button>
               </div>
@@ -95,16 +187,16 @@ export default function CompanionPage() {
             </div>
             <div className="space-y-3 text-sm text-slate-200">
               <div className="flex items-center justify-between">
-                <span>Qwen connection</span>
-                <span className={mode === 'live' ? 'text-emerald-300' : 'text-amber-300'}>{mode === 'live' ? 'Connected' : 'Demo mode'}</span>
+                <span>ElevenLabs agent</span>
+                <span className={agentStatus === 'connected' ? 'text-emerald-300' : 'text-amber-300'}>{mode === 'live' ? agentStatus : 'Demo mode'}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span>Voice input</span>
-                <span>{isListening ? 'Listening' : 'Idle'}</span>
+                <span>{mode === 'live' ? 'Robot microphone' : 'Demo mode'}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span>Speech output</span>
-                <span>Ready</span>
+                <span>{speakerEnabled ? 'Robot speaker enabled' : 'Muted'}</span>
               </div>
             </div>
           </div>

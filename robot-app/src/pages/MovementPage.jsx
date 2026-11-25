@@ -1,29 +1,30 @@
 import { Activity, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Radio, ShieldAlert, Zap } from 'lucide-react';
 import { useState } from 'react';
 import ControlPad from '../components/ControlPad';
+import { useRobot } from '../context/RobotContext';
 import { motorStatuses, movementHistory } from '../data/demoData';
+import useRobotMovement from '../hooks/useRobotMovement';
 
 export default function MovementPage() {
   const [speed, setSpeed] = useState(68);
   const [manualMode, setManualMode] = useState(true);
-  const [warning, setWarning] = useState(true);
-  const [lastCommand, setLastCommand] = useState('Idle');
-
-  const handleMove = (direction) => {
-    setLastCommand(`Move: ${direction}`);
-    if (warning) {
-      setWarning(true);
-    }
-  };
-
-  const handleStop = () => {
-    setLastCommand('Stop command sent');
-  };
+  const [warning] = useState(true);
+  const { mode } = useRobot();
+  const movement = useRobotMovement(speed);
 
   return (
     <div className="space-y-6 pb-8">
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <ControlPad onMove={handleMove} onStop={handleStop} disabled={false} showWarning={warning} />
+        <div>
+          <ControlPad
+            onMove={movement.handleMove}
+            onStop={movement.handleStop}
+            disabled={!movement.liveMode || movement.pending}
+            showWarning={warning}
+          />
+          {!movement.liveMode && <p className="mt-2 text-xs text-amber-200">Select Live mode in the top bar to control the robot.</p>}
+          {movement.error && <p role="alert" className="mt-2 text-sm text-rose-300">{movement.error}</p>}
+        </div>
 
         <div className="dark-panel rounded-2xl border border-slate-800 p-4">
           <div className="mb-4 flex items-center justify-between">
@@ -49,9 +50,14 @@ export default function MovementPage() {
               </button>
             </div>
 
-            <button type="button" onClick={() => { setLastCommand('Emergency stop activated'); setWarning(true); }} className="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200">
+            <button type="button" onClick={movement.handleStop} className="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200">
               <Zap size={16} /> Emergency stop
             </button>
+            <p className="text-xs text-slate-400">
+              {mode === 'live'
+                ? 'Each direction click sends a timed command; the current firmware does not support motor speed percentages.'
+                : 'Switch to Live mode to send commands to the robot.'}
+            </p>
 
             {warning && (
               <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
@@ -69,7 +75,7 @@ export default function MovementPage() {
             <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Motor status</div>
             <h2 className="mt-1 text-xl font-semibold text-white">Four motor channels</h2>
           </div>
-          <div className="flex items-center gap-2 text-sm text-slate-300"><Activity size={14} /> {lastCommand}</div>
+          <div className="flex items-center gap-2 text-sm text-slate-300"><Activity size={14} /> {movement.lastCommand}</div>
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

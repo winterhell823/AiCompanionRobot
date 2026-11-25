@@ -1,33 +1,30 @@
 import { apiRequest } from './api';
 
-export async function sendChatMessage({ text, mode = 'demo' }) {
-  if (mode === 'demo') {
-    return {
-      reply: `Demo response: I have recorded the message "${text}" and will route it to the Qwen backend once live mode is connected.`,
-      source: 'demo',
-    };
+export async function startAssistantConversation(callbacks) {
+  const { Conversation } = await import('@elevenlabs/client');
+  const { signedUrl } = await apiRequest({
+    url: '/api/assistant/session',
+    method: 'POST',
+    data: {},
+  });
+
+  if (typeof signedUrl !== 'string' || !signedUrl) {
+    throw new Error('Backend did not provide an ElevenLabs conversation URL.');
   }
 
-  return apiRequest({
-    url: '/api/assistant/chat',
-    method: 'POST',
-    data: { message: text },
-    fallback: {
-      reply: 'AI integration is required. Connect the backend to enable Qwen responses.',
-      source: 'pending',
-    },
+  return Conversation.startSession({
+    signedUrl,
+    connectionType: 'websocket',
+    textOnly: true,
+    overrides: { conversation: { textOnly: true } },
+    ...callbacks,
   });
 }
 
-export async function sendVoicePrompt({ text, mode = 'demo' }) {
-  if (mode === 'demo') {
-    return { success: true, message: 'Demo voice capture received.' };
-  }
-
+export async function speakAssistantReply(text) {
   return apiRequest({
-    url: '/api/assistant/voice',
+    url: '/api/assistant/speak',
     method: 'POST',
     data: { text },
-    fallback: { success: false, message: 'Voice integration is required.' },
   });
 }

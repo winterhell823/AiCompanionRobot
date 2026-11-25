@@ -2,7 +2,7 @@
 
 # AI Companion Robot
 
-**A voice-interactive, obstacle-aware companion robot: an ESP32 body, Gemini for conversation, ElevenLabs for speech, and YOLO + OpenCV for vision.**
+**A voice-interactive, obstacle-aware companion robot: Gemini for robot-mic replies, ElevenLabs Conversational AI for dashboard chat, ElevenLabs speech, and YOLO + OpenCV for vision.**
 
 ![ESP32](https://img.shields.io/badge/ESP32-DevKit%20V1-E7352C?logo=espressif&logoColor=white)
 ![Arduino](https://img.shields.io/badge/Firmware-Arduino%20C%2B%2B-00979D?logo=arduino&logoColor=white)
@@ -62,10 +62,13 @@ The work is split by what each device does best. An **ESP32** handles real-time 
 ```mermaid
 flowchart LR
     U(["User voice"]) --> MIC["Microphone<br/>(on robot)"]
-    MIC -- "16 kHz PCM over Wi-Fi (TCP)" --> STT["Speech-to-Text<br/>ElevenLabs Scribe"]
+    MIC -- "16 kHz PCM over Wi-Fi (TCP)" --> STT["Speech-to-Text<br/>local faster-whisper"]
     STT --> LLM["Gemini Flash<br/>reply + emotion + tool calls"]
     LLM --> TTS["Text-to-Speech<br/>ElevenLabs"]
     TTS -- "PCM over TCP" --> SPK["Speaker<br/>(on robot)"]
+    CHAT["Dashboard text chat"] --> AGENT["ElevenLabs Conversational AI"]
+    AGENT --> UI["Dashboard reply"]
+    AGENT -- "optional spoken reply" --> TTS
     LLM -- "HTTP /face" --> TFT["TFT face"]
     LLM -- "HTTP /cmd" --> ESP["ESP32 controller"]
     ESP --> MD["Motor driver"] --> MOT["DC geared motors"]
@@ -76,7 +79,7 @@ flowchart LR
 
 | Layer | Runs on | Responsibility |
 |---|---|---|
-| **AI processing** | Laptop (Python) | Speech-to-text, Gemini reasoning, text-to-speech, object detection, function calling |
+| **AI processing** | Laptop (Python) | Local speech recognition, Gemini replies for robot-mic input, ElevenLabs speech, object detection |
 | **Control** | ESP32 | Motor control, obstacle sensing, display, audio streaming, HTTP API |
 | **Interface** | TFT screen, speaker, dashboard | Faces and status on the robot, monitoring and control from a browser |
 
@@ -88,12 +91,20 @@ flowchart LR
 | HW-130 motor shield (2x L293D + 74HC595) | Drives four DC geared motors |
 | 4x DC geared motors on a yellow chassis | Locomotion |
 | HC-SR04 ultrasonic sensor | Front distance and obstacle detection |
-| ST7735 1.8" TFT (160x128) | Faces, clock, weather, sonar page |
+| ST7735 1.8" TFT (160x128) | Faces with distance HUD, camera preview with distance overlay, clock, weather and sonar |
 | ESP32-CAM | Camera stream for vision |
 | INMP441 I2S MEMS microphone | Voice input |
 | Speaker + HW-104 (PAM8403) amplifier | Voice output |
 | 3S Li-ion pack with 20 A BMS | Main power |
 | LM2596 buck converter | Stable 5 V logic rail |
+
+The listening face clears after 5 seconds without a new face update. The TFT keeps its
+10-second camera-preview cadence; distance remains visible over face and camera screens,
+and the sonar page continues to show readings when the camera is offline.
+The robot firmware expects the ESP32-CAM at `192.168.1.10` by default; reserve that address
+for the camera or update `CAMERA_IP` in `esp32_robot/src/robot_server.ino`.
+Live weather questions in the Companion page use Open-Meteo; set `WEATHER_DEFAULT_LOCATION`
+in `.env` to choose the location used when a question does not name a city.
 
 ### Pin map
 
@@ -156,8 +167,8 @@ Add a 470-1000 µF and a 100 nF capacitor across the amplifier's 5 V pins to red
 |---|---|
 | Firmware | Arduino C++ (ESP32 core), FreeRTOS task for audio, I2S, WebServer |
 | Language (AI app) | Python 3.10+ |
-| Conversation | Google Gemini Flash (model set with `GEMINI_MODEL`), function calling |
-| Speech-to-text | ElevenLabs Scribe v2 |
+| Conversation | Google Gemini for robot-mic replies; ElevenLabs Conversational AI for frontend chat |
+| Speech-to-text | faster-whisper running locally |
 | Text-to-speech | ElevenLabs Flash v2.5 |
 | Vision | YOLO (Ultralytics) + OpenCV |
 | Display | Adafruit GFX + Adafruit ST7735 libraries |
@@ -229,21 +240,32 @@ Edit `.env`:
 
 | Variable | Description |
 |---|---|
-| `ELEVENLABS_API_KEY` | ElevenLabs key (speech-to-text and text-to-speech) |
+| `ELEVENLABS_API_KEY` | ElevenLabs key for speech output and private conversation sessions |
 | `ELEVEN_VOICE_ID` | Voice to use for replies |
+| `ELEVENLABS_AGENT_ID` | ElevenLabs Conversational AI agent used by frontend chat |
 | `GEMINI_API_KEY` | Google Gemini key |
 | `GEMINI_MODEL` | Gemini model name (for example `gemini-2.5-flash`) |
 | `ESP32_IP` | The IP address printed by the robot |
+| `VOICE_BRIDGE_PORT` | Local speaker bridge port (default `8001`) |
 | `AUDIO_SOURCE` | `robot` (default, uses the robot's mic and speaker) or `mac` (laptop mic and speaker, for testing) |
 | `VAD_MIN` | Speech-detection threshold; raise it if noise triggers the robot, lower it if it misses your voice |
 
 ### 4. Run
 
 ```bash
-python main.py
+# Terminal 1: robot microphone, speaker, and local speaker bridge
+python app.py
+
+# Terminal 2: frontend API
+python api_server.py
+
+# Terminal 3: frontend
+npm --prefix robot-app run dev
 ```
 
-The robot connects, greets you with "Hello, how may I help you?", and starts listening.
+Set the ElevenLabs agent to text-only chat mode. The backend creates signed session URLs, so the ElevenLabs API key stays out of the browser. The voice app exposes a loopback-only speaker bridge on port 8001 for chat replies.
+
+The robot connects, greets you through its speaker, and starts listening.
 
 ## Usage
 

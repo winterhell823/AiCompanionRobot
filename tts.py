@@ -20,20 +20,24 @@ class ElevenLabsStreamer:
 
     def speak(self, text: str):
         if not text or not text.strip():
-            return
+            return 0
+        if self.receiver is None:
+            raise RuntimeError("ESP32 audio receiver is not connected")
+
         print(f"[TTS] Speaking: {text}")
-        try:
-            bytes_sent = 0
-            stream = self.eleven.text_to_speech.convert(
-                voice_id=self.voice_id,
-                text=text,
-                model_id="eleven_flash_v2_5",
-                output_format="pcm_16000",
-            )
-            for chunk in stream:
-                if chunk and self.receiver:
-                    self.receiver.send_pcm(chunk)
-                    bytes_sent += len(chunk)
-            time.sleep(bytes_sent / 32000.0 + 0.25)
-        except Exception as exc:
-            print(f"[TTS] ElevenLabs TTS failed: {exc}")
+        bytes_sent = 0
+        stream = self.eleven.text_to_speech.convert(
+            voice_id=self.voice_id,
+            text=text,
+            model_id="eleven_flash_v2_5",
+            output_format="pcm_16000",
+        )
+        for chunk in stream:
+            if chunk:
+                self.receiver.send_pcm(chunk)
+                bytes_sent += len(chunk)
+        if bytes_sent == 0:
+            raise RuntimeError("ElevenLabs returned no speech audio")
+
+        time.sleep(bytes_sent / 32000.0 + 0.25)
+        return bytes_sent
